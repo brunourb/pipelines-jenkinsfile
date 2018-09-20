@@ -1,0 +1,88 @@
+#!/usr/bin/env groovy
+
+node(env.AMBIENTE) {
+    env.FOLDER_REPOSITORY = UUID.randomUUID().toString()
+    env.TEMP_REPOSITORY = UUID.randomUUID().toString()
+    env.URL_GIT_REPOSITORY = null
+    env.PASTA = env.HAS_TRUNK == "S" ? "trunk" : "git-svn"
+
+    ansiColor('xterm') {
+        // Just some echoes to show the ANSI color.
+
+        stage('Clonar repositorio') {
+
+            echo "\u001B[31mClonando repositorio\u001B[0m"
+//        sh "rm -rf ${env.WORKSPACE}/*"
+//        sh "rm -rf ${env.WORKSPACE}/${env.FOLDER_REPOSITORY}/"
+//        sh "rm -rf ${env.WORKSPACE}/${env.TEMP_REPOSITORY}.git"
+
+            sh "mkdir ${env.FOLDER_REPOSITORY}/"
+
+            def stdlayout = env.HAS_TRUNK == "S" ? "--stdlayout" : ""
+            env.URL_GIT_REPOSITORY = env.NOME_PROJETO == "" ? "${env.NOME_CONTEXTO}.git" : "${env.NOME_CONTEXTO}/${env.NOME_PROJETO}.git"
+            sh "git svn clone ${env.REPOSITORIO_SVN}/${env.NOME_CONTEXTO}/${NOME_PROJETO}/ --no-metadata ${stdlayout} ${env.WORKSPACE}/${env.FOLDER_REPOSITORY}"
+        }
+        stage('Criar master a partir da trunk') {
+
+            echo "\u001B[31mCriar master a partir da trunk\u001B[0m"
+
+
+            sh "git init --bare ${env.WORKSPACE}/${env.TEMP_REPOSITORY}.git"
+
+            dir("${env.TEMP_REPOSITORY}.git"){
+                def comandoTrunk = env.HAS_TRUNK == "S" ? "git symbolic-ref HEAD refs/heads/trunk" : "echo 'Nenhuma trunk especificada'"
+                sh comandoTrunk
+            }
+
+            dir(env.FOLDER_REPOSITORY){
+                sh "git remote add bare ${env.WORKSPACE}/${env.TEMP_REPOSITORY}.git"
+                sh "git config remote.bare.push 'refs/remotes/*:refs/heads/*'"
+                sh "git push bare"
+            }
+
+            dir("${env.TEMP_REPOSITORY}.git"){
+                sh "git branch -m ${env.PASTA} master"
+                sh "git remote add origin http://jenkins:Gitlab2016@git.intra.goias.gov.br/${env.GRUPO_REPOSITORIO_GIT}/${env.URL_GIT_REPOSITORY}"
+                sh "git push -u origin master"
+            }
+        }
+        stage('Criar branchs e tags') {
+            dir("${env.TEMP_REPOSITORY}.git"){
+                //https://stackoverflow.com/questions/33760321/wrong-branch-prefixes-migrating-svn-to-git
+                def comandoGit = '''git for-each-ref --format='%(refname)' refs/heads/tags |cut -d / -f 4 |
+        while read ref
+        do
+         git tag "$ref" "refs/heads/tags/$ref";
+         git branch -D "tags/$ref";
+        done'''
+
+                sh comandoGit
+
+                echo "\u001B[31m Criar branchs e tags\u001B[0m"
+            }
+        }
+        stage('Enviar codigo para o repositorio') {
+            dir("${env.TEMP_REPOSITORY}.git"){
+                sh "git push --tags"
+                def displayName = env.NOME_PROJETO ?: env.NOME_CONTEXTO
+
+                //currentBuild.displayName = "${displayName} "+currentBuild.number
+                currentBuild.description = "${env.NOME_CONTEXTO} ${NOME_PROJETO} "+currentBuild.number
+            }
+
+            echo "\u001B[31mRepositorio: http://git.intra.goias.gov.br/${env.GRUPO_REPOSITORIO_GIT}/${env.URL_GIT_REPOSITORY}\u001B[0m"
+        }
+
+        stage('Apagando arquivos locais') {
+            dir(env.WORKSPACE){
+                sh "rm -rf ${env.FOLDER_REPOSITORY}*"
+                sh "rm -rf ${env.TEMP_REPOSITORY}*"
+
+                echo "\u001B[31m Diretorios apagados: ${env.FOLDER_REPOSITORY} e ${env.TEMP_REPOSITORY}\u001B[0m"
+            }
+            def displayName = env.NOME_PROJETO ?: env.NOME_CONTEXTO
+            //currentBuild.displayName = "${displayName} "+currentBuild.number
+            currentBuild.description = "${env.NOME_CONTEXTO} ${NOME_PROJETO} " + currentBuild.number
+        }
+    }
+}
